@@ -1,0 +1,75 @@
+# Reverse port-forward helper — install this ON THE SERVER, not locally.
+#
+# Why: the service runs on the server, and you want to trigger the tunnel
+# from inside an SSH session you're already in (terminal two) rather than
+# from your local machine. That means the SERVER has to open a connection
+# BACK to your Mac and ask it to forward a port — i.e. `ssh -R`.
+#
+# Requirements:
+#   - Remote Login (SSH server) enabled on your Mac:
+#     System Settings -> General -> Sharing -> Remote Login
+#   - The server must be able to reach your Mac's address (same LAN, or
+#     a VPN / Tailscale if not — plain home NAT alone won't work)
+#   - Ideally, passwordless key auth from the server back to your Mac,
+#     so `forward` doesn't prompt for a password every time
+#
+# Install (run once from your Mac):
+#   scp bash.txt myserver:~/.forward.sh
+#   ssh myserver 'echo "source ~/.forward.sh" >> ~/.bashrc'
+#
+# Then, in terminal two (already ssh'd into the server):
+#   forward 8080
+#
+# Set LOCAL_USER / LOCAL_HOST below, or export them before calling forward,
+# e.g. `export LOCAL_HOST=192.168.1.42` or your Mac's Tailscale name.
+
+LOCAL_USER="${LOCAL_USER:-you}"
+LOCAL_HOST="${LOCAL_HOST:-your-local-machine.local}"
+
+forward() {
+    local port="$1"
+    local user="${2:-$LOCAL_USER}"
+    local host="${3:-$LOCAL_HOST}"
+
+    local bold=$'\033[1m'
+    local reset=$'\033[0m'
+    local red=$'\033[0;31m'
+    local green=$'\033[0;32m'
+    local yellow=$'\033[0;33m'
+    local cyan=$'\033[0;36m'
+
+    if [[ -z "$port" ]]; then
+        echo "${red}✗ Usage: forward PORT [user] [host]${reset}"
+        return 1
+    fi
+
+    if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+        echo "${red}✗ PORT must be a number between 1 and 65535${reset}"
+        return 1
+    fi
+
+    if [[ "$host" == "your-local-machine.local" ]]; then
+        echo "${red}✗ LOCAL_HOST is not configured — edit ~/.forward.sh or export LOCAL_HOST=user@host${reset}"
+        return 1
+    fi
+
+    echo
+    echo "${cyan}${bold}┌─────────────────────────────────────────────┐${reset}"
+    printf "${cyan}${bold}│${reset}  %-43s${cyan}${bold}│${reset}\n" "This server:${port} → ${host}:${port} (your Mac)"
+    echo "${cyan}${bold}└─────────────────────────────────────────────┘${reset}"
+    echo "${yellow}  Tunnel active — press Ctrl+C to stop${reset}"
+    echo
+
+    trap 'echo; echo "${red}${bold}✗ Forwarding stopped${reset}"' INT
+
+    ssh -N -o ExitOnForwardFailure=yes -R "${port}:localhost:${port}" "${user}@${host}"
+    local status=$?
+
+    trap - INT
+
+    if (( status == 0 )); then
+        echo "${green}✓ Tunnel closed${reset}"
+    fi
+
+    return $status
+}
